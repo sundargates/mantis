@@ -15,7 +15,7 @@ Our `TwitterSource` must implement `io.mantisrx.runtime.source.Source` which req
 
 Let's deconstruct the `init` method first. Here we will extract our parameters from the `Context` -- this allows us to write more generic sources which can be templatized and reused across many jobs. This is a very common pattern for writing Mantis jobs and allows you to iterate quickly testing various configurations as jobs can be resubmitted easily with new parameters.
   
-```
+```java
 /**
   * Init method is called only once during initialization. It is the ideal place to perform one time
   * configuration actions.
@@ -61,7 +61,7 @@ public void init(Context context, Index index) {
 
 Our `call` method is very simple thanks to the fact that our twitter client writes to a custom `BlockingQueue` adapter that we've written. We simply need to return an `Observable<Observable<T>>`.
 
-```
+```java
 @Override
 public Observable<Observable<String>> call(Context context, Index index) {
     return Observable.just(twitterObservable.observe());
@@ -73,7 +73,7 @@ public Observable<Observable<String>> call(Context context, Index index) {
 
 Our interfaces are functional interfaces and can consequently be implemented inline with a lambda function if the user so desires. We'll take advantage of this to define the stage inline with the job definition in the `TwitterJob` class.
 
-```
+```java
 @Override
 public Job<String> getJobInstance() {
     return MantisJob
@@ -137,104 +137,14 @@ public Job<String> getJobInstance() {
 ## The Sink
 The sink is handled on the single line below inline with the job definition. The job of the Sink is to make the data available to external systems which can range from ElasticSearch, S3, Hive, Kafka, and commonly Server Sent Events which other jobs can subscribe to. A more sophisticated sink might perform tasks such as serialization or handling MQL queries for downstream clients -- ours is just a simple SSE sink that we eagerly subscribe to.
 
-```
+```java
 .sink(Sinks.eagerSubscribe(Sinks.sse((String data) -> data)))
 ```
 
 ## The Job
 
-All of this needs to be strung together and this is done via the `MantisJobProvider` class which defines our overall job and requires us to implement the `getJobInstance` method seen above in our implementation of the stage. The full class (package definition and imports elided) is below. We include a `main` method which invokes the local job executor in order to allow you to test your job locally.
-
-
-```
-/**
- * This sample demonstrates connecting to a twitter feed and counting the number of occurrences of words within a 10
- * sec hopping window.
- * Run the main method of this class and then look for a the SSE port in the output
- * E.g
- * <code> Serving modern HTTP SSE server sink on port: 8650 </code>
- * You can curl this port <code> curl localhost:8650</code> to view the output of the job.
- *
- * To run via gradle
- * ../gradlew execute --args='consumerKey consumerSecret token tokensecret'
- */
-@Slf4j
-public class TwitterJob extends MantisJobProvider<String> {
-
-    @Override
-    public Job<String> getJobInstance() {
-        return MantisJob
-                .source(new TwitterSource())
-                // Simply echoes the tweet
-                .stage((context, dataO) -> dataO
-                        .map(JsonUtility::jsonToMap)
-                        // filter out english tweets
-                        .filter((eventMap) -> {
-                            if(eventMap.containsKey("lang") && eventMap.containsKey("text")) {
-                                String lang = (String)eventMap.get("lang");
-                                return "en".equalsIgnoreCase(lang);
-                            }
-                            return false;
-                        }).map((eventMap) -> (String)eventMap.get("text"))
-                        // tokenize the tweets into words
-                        .flatMap((text) -> Observable.from(tokenize(text)))
-                        // On a hopping window of 10 seconds
-                        .window(10, TimeUnit.SECONDS)
-                        .flatMap((wordCountPairObservable) -> wordCountPairObservable
-                                // count how many times a word appears
-                                .groupBy(WordCountPair::getWord)
-                                .flatMap((groupO) -> groupO.reduce(0, (cnt, wordCntPair) -> cnt + 1)
-                                        .map((cnt) -> new WordCountPair(groupO.getKey(), cnt))))
-                                .map(WordCountPair::toString)
-                                .doOnNext((cnt) -> log.info(cnt))
-                        , StageConfigs.scalarToScalarConfig())
-                // Reuse built in sink that eagerly subscribes and delivers data over SSE
-                .sink(Sinks.eagerSubscribe(Sinks.sse((String data) -> data)))
-                .metadata(new Metadata.Builder()
-                        .name("TwitterSample")
-                        .description("Connects to a Twitter feed")
-                        .build())
-                .create();
-    }
-
-    private List<WordCountPair> tokenize(String text) {
-        StringTokenizer tokenizer = new StringTokenizer(text);
-        List<WordCountPair> wordCountPairs = new ArrayList<>();
-        while(tokenizer.hasMoreTokens()) {
-            String word = tokenizer.nextToken().replaceAll("\\s*", "").toLowerCase();
-            wordCountPairs.add(new WordCountPair(word,1));
-        }
-        return wordCountPairs;
-    }
-
-
-    public static void main(String[] args) {
-
-        String consumerKey = null;
-        String consumerSecret = null;
-        String token = null;
-        String tokenSecret = null;
-        if(args.length != 4) {
-            System.out.println("Usage: java com.netflix.mantis.examples.TwitterJob <consumerKey> <consumerSecret> <token> <tokenSecret");
-            System.exit(0);
-        } else {
-            consumerKey = args[0].trim();
-            consumerSecret = args[1].trim();
-            token = args[2].trim();
-            tokenSecret = args[3].trim();
-        }
-
-        LocalJobExecutorNetworked.execute(new TwitterJob().getJobInstance(),
-                new Parameter(TwitterSource.CONSUMER_KEY_PARAM,consumerKey),
-                new Parameter(TwitterSource.CONSUMER_SECRET_PARAM, consumerSecret),
-                new Parameter(TwitterSource.TOKEN_PARAM, token),
-                new Parameter(TwitterSource.TOKEN_SECRET_PARAM, tokenSecret)
-
-        );
-    }
-}
-```
+All of this needs to be strung together and this is done via the `MantisJobProvider` class which defines our overall job and requires us to implement the `getJobInstance` method seen above in our implementation of the stage. The full class can be viewed in the [mantis-examples/twitter-sample](https://github.com/Netflix/mantis-examples/tree/master/twitter-sample) repository.
 
 # Wrapping Up
 
-You can view the full source of the [Twitter Sample]()
+We've left out a few details such as defining parameters, job metadata, the main method with the LocalJobExecutorNetworked class. These will all be covered in later tutorials. For now check out the repository and run the Twitter Sample by executing `./gradlew :twitter-sample:execute.
