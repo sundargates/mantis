@@ -147,4 +147,4 @@ All of this needs to be strung together and this is done via the `MantisJobProvi
 
 # Wrapping Up
 
-We've left out a few details such as defining parameters, job metadata, the main method with the LocalJobExecutorNetworked class. These will all be covered in later tutorials. For now check out the repository and run the Twitter Sample by executing `./gradlew :twitter-sample:execute.
+We've left out a few details such as defining parameters, job metadata, the main method with the LocalJobExecutorNetworked class. These will all be covered in later tutorials. For now check out the repository and run the Twitter Sample by executing `./gradlew :twitter-sample:execute`.
