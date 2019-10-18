@@ -6,7 +6,7 @@ There are a few things to keep in mind when implementing a Mantis Job.
 
 * It is just Java. We need to implement a few interfaces but ultimately we're just writing Java.
 * Mantis jobs are composed of a source, n stages, and a sink.
-* Mantis makes heavy use of RxJava as a DSL for implementing processing logic.
+* Mantis makes heavy use of Reactive Streams as a DSL for implementing processing logic.
 
 ## The Source
 The source is responsible for ingesting data to be processed within the job. Many Mantis jobs will subscribe to other jobs and can simply use a templatized source such as `io.mantisrx.connectors.job.source.JobSource` which handles all the minutae of connecting to other jobs for us. If however your job exists on the edge of Mantis it will need to pull data in via a custom source. Since we're reading from the Twitter API we'll need to do this ourselves.
@@ -71,21 +71,10 @@ public Observable<Observable<String>> call(Context context, Index index) {
 
 ## The Stage
 
-Our interfaces are functional interfaces and can consequently be implemented inline with a lambda function if the user so desires. We'll take advantage of this to define the stage inline with the job definition in the `TwitterJob` class.
+Our interfaces are functional interfaces and can consequently be implemented inline with a lambda function instead of in a separate class. We'll take advantage of this to define the stage inline with the job definition in the `TwitterJob` class which is the `MantisJobProvider` (see below) for the entire job.
 
 ```java
 @Override
-public Job<String> getJobInstance() {
-    return MantisJob
-            
-            // Invoke our TwitterSource
-            .source(new TwitterSource())
-
-
-            //
-            // Define Our Stage
-            // 
-
             // Much like our Source the stage takes a Context, but the second parameter is an Observable<T> (String in this case)
             // 
             .stage((context, dataO) -> dataO
@@ -120,17 +109,6 @@ public Job<String> getJobInstance() {
                             .map(WordCountPair::toString)
                             .doOnNext((cnt) -> log.info(cnt))
                     , StageConfigs.scalarToScalarConfig())
-
-            //
-            // Reuse built in sink that eagerly subscribes and delivers data over SSE
-            //
-
-            .sink(Sinks.eagerSubscribe(Sinks.sse((String data) -> data)))
-            .metadata(new Metadata.Builder()
-                    .name("TwitterSample")
-                    .description("Connects to a Twitter feed")
-                    .build())
-            .create();
 }
 ```
 
@@ -143,7 +121,7 @@ The sink is handled on the single line below inline with the job definition. The
 
 ## The Job
 
-All of this needs to be strung together and this is done via the `MantisJobProvider` class which defines our overall job and requires us to implement the `getJobInstance` method seen above in our implementation of the stage. The full class can be viewed in the [mantis-examples/twitter-sample](https://github.com/Netflix/mantis-examples/tree/master/twitter-sample) repository.
+All of this needs to be strung together and this is done via the `MantisJobProvider` class which defines our overall job and requires us to implement the `getJobInstance` method seen above in our implementation of the stage. The full class can be viewed in the [mantis-examples/twitter-sample](https://github.com/Netflix/mantis-examples/tree/master/twitter-sample) repository where the [TwitterJob](https://github.com/Netflix/mantis-examples/blob/master/twitter-sample/src/main/java/com/netflix/mantis/examples/twittersample/TwitterJob.java) class brings this all together.
 
 # Wrapping Up
 
