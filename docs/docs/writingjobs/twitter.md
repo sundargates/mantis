@@ -1,4 +1,4 @@
-# Writing Your First Mantis Job
+# Writing Your Second Mantis Job
 
 We'll be doing the classic word count example for streaming data. For this job we'll stream Tweets from Twitter, perform some application logic on the stream, and then write the data to a sink for consumption by other Mantis jobs. If you want to follow along check out the [Twitter Sample](https://github.com/Netflix/mantis-examples/tree/master/twitter-sample) project in our [mantis-examples](https://github.com/Netflix/mantis-examples/) repository.
 
