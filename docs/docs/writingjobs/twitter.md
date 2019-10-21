@@ -1,17 +1,13 @@
 # Writing Your Second Mantis Job
 
-We'll be doing the classic word count example for streaming data. For this job we'll stream Tweets from Twitter, perform some application logic on the stream, and then write the data to a sink for consumption by other Mantis jobs. If you want to follow along check out the [Twitter Sample](https://github.com/Netflix/mantis-examples/tree/master/twitter-sample) project in our [mantis-examples](https://github.com/Netflix/mantis-examples/) repository.
+Our first tutorial primed us for writing and executing a job end-to-end but it wasn't particularly interesting from a data perspective because it just repeatedly looped over the contents of a book. In this example we'll explore writing a more involved source which reads an infinite stream of data from Twitter and performs the same word count in real-time. Mantis jobs can easily subscribe to one another using some built in sources but the technique in this tutorial can be used to pull external data into the Mantis ecosystem.
 
-There are a few things to keep in mind when implementing a Mantis Job.
-
-* It is just Java. We need to implement a few interfaces but ultimately we're just writing Java.
-* Mantis jobs are composed of a source, n stages, and a sink.
-* Mantis makes heavy use of Reactive Streams as a DSL for implementing processing logic.
+To proceed you'll need to head over to Twitter and grab yourself a pair of API keys.
 
 ## The Source
-The source is responsible for ingesting data to be processed within the job. Many Mantis jobs will subscribe to other jobs and can simply use a templatized source such as `io.mantisrx.connectors.job.source.JobSource` which handles all the minutae of connecting to other jobs for us. If however your job exists on the edge of Mantis it will need to pull data in via a custom source. Since we're reading from the Twitter API we'll need to do this ourselves.
+The source is responsible for ingesting data to be processed within the job. Many Mantis jobs will subscribe to other jobs and can simply use a templatized source such as [`io.mantisrx.connectors.job.source.JobSource`](https://github.com/Netflix/mantis-connectors/blob/master/mantis-connector-job/src/main/java/io/mantisrx/connector/job/source/JobSource.java) which handles all the minutiae of connecting to other jobs for us. If however your job exists on the edge of Mantis it will need to pull data in via a custom source. Since we're reading from the Twitter API we'll need to do this ourselves.
 
-Our `TwitterSource` must implement `io.mantisrx.runtime.source.Source` which requires us to implement `call` and optionally `init`. Mantis provides some guarantees here in that `init` will be invoked exactly once and before `call` which will be invoked at least once. This makes `init` the ideal location to perform one time setup and configuration for the source and `call` the ideal location for performing work on the incoming stream. The objective of this entire class is to have `call` return an `Observable<Observable<T>>` which will be passed as a parameter to the first stage of our job.
+Our [`TwitterSource`](https://github.com/Netflix/mantis/blob/master/mantis-runtime/src/main/java/io/mantisrx/runtime/source/Source.java) must implement [`io.mantisrx.runtime.source.Source`](https://github.com/Netflix/mantis/blob/master/mantis-runtime/src/main/java/io/mantisrx/runtime/source/Source.java) which requires us to implement `call` and optionally `init`. Mantis provides some guarantees here in that `init` will be invoked exactly once and before `call` which will be invoked at least once. This makes `init` the ideal location to perform one time setup and configuration for the source and `call` the ideal location for performing work on the incoming stream. The objective of this entire class is to have `call` return an `Observable<Observable<T>>` which will be passed as a parameter to the first stage of our job.
 
 Let's deconstruct the `init` method first. Here we will extract our parameters from the `Context` -- this allows us to write more generic sources which can be templatized and reused across many jobs. This is a very common pattern for writing Mantis jobs and allows you to iterate quickly testing various configurations as jobs can be resubmitted easily with new parameters.
   
@@ -69,14 +65,71 @@ public Observable<Observable<String>> call(Context context, Index index) {
 
 ```
 
-## The Stage
-
-Our interfaces are functional interfaces and can consequently be implemented inline with a lambda function instead of in a separate class. We'll take advantage of this to define the stage inline with the job definition in the `TwitterJob` class which is the `MantisJobProvider` (see below) for the entire job.
+You may have noticed that our `init` method is pulling a bunch of parameters out of the [`Context`](https://github.com/Netflix/mantis/blob/master/mantis-runtime/src/main/java/io/mantisrx/runtime/Context.java). These are specified in `Source#getParameters()` and allow us to parameterize this source so that different instances of this job may work with different parameters. This is a very useful concept for designing reusable components for constructing jobs as well as completely reusable jobs.
 
 ```java
-@Override
-            // Much like our Source the stage takes a Context, but the second parameter is an Observable<T> (String in this case)
-            // 
+    /**
+     * Define parameters required by this source.
+     *
+     * @return
+     */
+    @Override
+    public List<ParameterDefinition<?>> getParameters() {
+        List<ParameterDefinition<?>> params = Lists.newArrayList();
+
+        // Consumer key
+        params.add(new StringParameter()
+                .name(CONSUMER_KEY_PARAM)
+                .description("twitter consumer key")
+                .validator(Validators.notNullOrEmpty())
+                .required()
+                .build());
+
+        params.add(new StringParameter()
+                .name(CONSUMER_SECRET_PARAM)
+                .description("twitter consumer secret")
+                .validator(Validators.notNullOrEmpty())
+                .required()
+                .build());
+
+        params.add(new StringParameter()
+                .name(TOKEN_PARAM)
+                .description("twitter token")
+                .validator(Validators.notNullOrEmpty())
+                .required()
+                .build());
+
+        params.add(new StringParameter()
+                .name(TOKEN_SECRET_PARAM)
+                .description("twitter token secret")
+                .validator(Validators.notNullOrEmpty())
+                .required()
+                .build());
+
+        params.add(new StringParameter()
+                .name(TERMS_PARAM)
+                .description("terms to follow")
+                .validator(Validators.notNullOrEmpty())
+                .defaultValue("Netflix,Dark")
+                .build());
+
+        return params;
+
+    }
+```
+
+Now our primary class `TwitterJob` which implements `MantisJobProvider` needs to specify our new source so change the source line to match the following.
+
+```java
+.source(new TwitterSource())
+```
+
+## The Stage
+
+The stage is nearly equivalent to the previous tutorial. We need to add a few lines to the beginning of the chain of operations to deserialize the string, filter for English Tweets and pluck out the text.
+
+
+```java
             .stage((context, dataO) -> dataO
 
                     // Deserialize data
@@ -94,35 +147,10 @@ Our interfaces are functional interfaces and can consequently be implemented inl
                     // Extract Tweet body
                     .map((eventMap) -> (String)eventMap.get("text"))
 
-                    // Tokenize Tweet Body
-                    .flatMap((text) -> Observable.from(tokenize(text)))
-
-                    // On a hopping window of 10 seconds
-                    .window(10, TimeUnit.SECONDS)
-
-                    // Reduce the windows into word/count pairs.
-                    .flatMap((wordCountPairObservable) -> wordCountPairObservable
-                            // count how many times a word appears
-                            .groupBy(WordCountPair::getWord)
-                            .flatMap((groupO) -> groupO.reduce(0, (cnt, wordCntPair) -> cnt + 1)
-                                    .map((cnt) -> new WordCountPair(groupO.getKey(), cnt))))
-                            .map(WordCountPair::toString)
-                            .doOnNext((cnt) -> log.info(cnt))
-                    , StageConfigs.scalarToScalarConfig())
-}
+                    // Same from here...
 ```
 
-## The Sink
-The sink is handled on the single line below inline with the job definition. The job of the Sink is to make the data available to external systems which can range from ElasticSearch, S3, Hive, Kafka, and commonly Server Sent Events which other jobs can subscribe to. A more sophisticated sink might perform tasks such as serialization or handling MQL queries for downstream clients -- ours is just a simple SSE sink that we eagerly subscribe to.
+# Conclusion
+We've learned how to create a parameterized source which reads from Twitter and pulls data into the ecosystem. With some slight modifications our previous example's stage deserializes the messages and extracts the data to perform the same word count.
 
-```java
-.sink(Sinks.eagerSubscribe(Sinks.sse((String data) -> data)))
-```
-
-## The Job
-
-All of this needs to be strung together and this is done via the `MantisJobProvider` class which defines our overall job and requires us to implement the `getJobInstance` method seen above in our implementation of the stage. The full class can be viewed in the [mantis-examples/twitter-sample](https://github.com/Netflix/mantis-examples/tree/master/twitter-sample) repository where the [TwitterJob](https://github.com/Netflix/mantis-examples/blob/master/twitter-sample/src/main/java/com/netflix/mantis/examples/twittersample/TwitterJob.java) class brings this all together.
-
-# Wrapping Up
-
-We've left out a few details such as defining parameters, job metadata, the main method with the LocalJobExecutorNetworked class. These will all be covered in later tutorials. For now check out the repository and run the Twitter Sample by executing `./gradlew :twitter-sample:execute`.
+If you've checked out the [`mantis-examples`](https://github.com/Netflix/mantis-examples) repository then running `./gradlew :mantis-examples-twitter-sample:execute --args='consumerKey consumerSecret token tokensecret'` at the root of the repository should begin running the job and expose a local port for SSE streaming. As an exercise consider how you might begin to scale this work out over multiple machines if the workload were too large to perform on a single host. This will be the topic of the next tutorial.
